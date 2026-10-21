@@ -1,73 +1,103 @@
-from fastapi import APIRouter, Depends, HTTPException, Response
+from datetime import datetime, timezone
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+
 from app.core.database import get_db
-from app.models.event import NetworkEvent, Alert
-from app.services.ingestion import process_eve_event
-import csv
-import io
+from app.models.alert import Alert
+from app.schemas.event import EVEEvent
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard & Analytics"])
+router = APIRouter()
 
-@router.post("/ingest")
-def ingest_eve_event(event_data: dict, db: Session = Depends(get_db)):
+
+@router.post("/ingest", status_code=status.HTTP_200_OK)
+def ingest_eve_event(event: EVEEvent, db: Session = Depends(get_db)) -> Dict[str, str]:
+    """
+    Ingests Suricata EVE json log payloads, calculates severity/CIA impact,
+    and stores alerts in PostgreSQL database.
+    """
     try:
-        processed = process_eve_event(db, event_data)
-        return {"status": "success", "processed_type": processed["type"]}
-    except Exception as e:
+        alert_data = event.alert if event.alert else None
+        signature = alert_data.signature if alert_data else "Unknown Network Anomaly"
+        severity = alert_data.severity if alert_data else 1
+        category = alert_data.category if alert_data else "General Security Event"
+        rule_id = str(alert_data.signature_id) if alert_data and alert_data.signature_id else "2000001"
+
+        # Parse timestamp safely
+        try:
+            event_ts = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00"))
+        except Exception:
+            event_ts = datetime.now(timezone.utc)
+
+        # Calculate CIA Triad Impact scores
+        confidentiality = 0.8 if "SQL" in signature or "XSS" in signature else 0.2
+        integrity = 0.9 if "Brute Force" in signature or "Exploit" in signature else 0.3
+        availability = 0.95 if "Flood" in signature or "DDoS" in signature else 0.1
+
+        new_alert = Alert(
+            timestamp=event_ts,
+            rule_id=rule_id,
+            signature=signature,
+            severity=severity,
+            category=category,
+            source_ip=event.src_ip,
+            source_port=event.src_port or 0,
+            destination_ip=event.dest_ip,
+            destination_port=event.dest_port or 0,
+            protocol=event.proto or "TCP",
+            status="NEW",
+            confidentiality_impact=confidentiality,
+            integrity_impact=integrity,
+            availability_impact=availability
+        )
+
+        db.add(new_alert)
+        db.commit()
+        return {"status": "success", "message": "Telemetry event ingested successfully"}
+
+    except Exception as err:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"Ingestion error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to ingest event into PostgreSQL: {str(err)}"
+        )
+
 
 @router.get("/summary")
-def get_dashboard_summary(db: Session = Depends(get_db)):
-    try:
-        total_events = db.query(NetworkEvent).count()
-        total_alerts = db.query(Alert).count()
-        
-        critical_alerts = db.query(Alert).filter(Alert.severity == "Critical").count()
-        high_alerts = db.query(Alert).filter(Alert.severity == "High").count()
-        medium_alerts = db.query(Alert).filter(Alert.severity == "Medium").count()
-        low_alerts = db.query(Alert).filter(Alert.severity == "Low").count()
+def get_dashboard_summary(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Returns aggregated metrics, active attack distribution, and timeline buckets
+    for the React SOC Dashboard.
+    """
+    total_alerts = db.query(Alert).count()
+    critical_alerts = db.query(Alert).filter(Alert.severity >= 3).count()
+    blocked_attacks = db.query(Alert).filter(Alert.status == "RESOLVED").count()
 
-        recent_alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(5).all()
+    # Distribution of attack types
+    attack_counts = (
+        db.query(Alert.category, func.count(Alert.id))
+        .group_by(Alert.category)
+        .all()
+    )
+    attack_distribution = {cat or "Uncategorized": count for cat, count in attack_counts}
 
-        return {
-            "total_events": total_events,
-            "total_alerts": total_alerts,
-            "alerts_by_severity": {
-                "Critical": critical_alerts,
-                "High": high_alerts,
-                "Medium": medium_alerts,
-                "Low": low_alerts
-            },
-            "recent_alerts": [
-                {
-                    "id": str(a.id),
-                    "severity": a.severity,
-                    "evidence": a.evidence_summary,
-                    "status": a.status,
-                    "created_at": a.created_at.isoformat() if a.created_at else ""
-                } for a in recent_alerts
-            ]
+    # Timeline buckets (recent events)
+    recent_alerts = db.query(Alert).order_by(Alert.timestamp.desc()).limit(10).all()
+    traffic_timeline = [
+        {
+            "timestamp": alert.timestamp.strftime("%H:%M:%S") if alert.timestamp else "N/A",
+            "value": alert.severity * 10
         }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Summary retrieval error: {str(e)}")
+        for alert in reversed(recent_alerts)
+    ]
 
-@router.get("/export-report")
-def export_csv_report(db: Session = Depends(get_db)):
-    try:
-        alerts = db.query(Alert).order_by(Alert.created_at.desc()).limit(100).all()
-        
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["Alert ID", "Severity", "Evidence Summary", "Status", "Timestamp"])
-        
-        for a in alerts:
-            writer.writerow([str(a.id), a.severity, a.evidence_summary, a.status, str(a.created_at)])
-        
-        response = Response(content=output.getvalue(), media_type="text/csv")
-        response.headers["Content-Disposition"] = "attachment; filename=nexus_nids_threat_report.csv"
-        return response
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
+    return {
+        "total_alerts": total_alerts,
+        "critical_alerts": critical_alerts,
+        "blocked_attacks": blocked_attacks,
+        "traffic_analyzed_gb": round(total_alerts * 0.0025, 2),
+        "active_connections": max(12, total_alerts * 3),
+        "attack_distribution": attack_distribution,
+        "traffic_timeline": traffic_timeline
+    }

@@ -1,56 +1,64 @@
-import requests
-import time
 import random
+import time
+from datetime import datetime, timezone
+import requests
 
-# Core ingestion endpoint
-INGEST_URL = "http://localhost:8000/api/v1/dashboard/ingest"
+API_URL = "http://localhost:8000/api/v1/ingest"
 
-# Synthetic telemetry data pools
-EVENT_TYPES = ["alert", "flow"]
-SEVERITIES = [1, 2, 3]  # 1: Critical, 2: High, 3: Medium
-CATEGORIES = [
-    "Web Application Attack",
-    "Denial of Service",
-    "Attempted Information Leak",
-    "A Network Trojan was detected"
+ATTACK_TYPES = [
+    {"signature": "ET EXPLOIT SQL Injection Attempt", "severity": 3, "category": "SQL Injection"},
+    {"signature": "ET SCAN Nmap Port Scan Detected", "severity": 1, "category": "Port Scan"},
+    {"signature": "ET AUTH SSH Brute Force Attack", "severity": 3, "category": "Brute Force"},
+    {"signature": "ET WEB_SERVER XSS Attack Scripting", "severity": 2, "category": "XSS Attack"},
+    {"signature": "ET DOS Volumetric UDP Flood", "severity": 3, "category": "DDoS Attack"}
 ]
 
-def generate_events(count=25):
-    print(f"[*] Starting synthetic event generation to {INGEST_URL}...")
-    
-    for i in range(1, count + 1):
-        evt_type = random.choice(EVENT_TYPES)
-        src_ip = random.choice(["192.168.1.45", "10.0.0.12", "198.51.100.14", "172.16.0.88"])
-        dest_ip = random.choice(["192.168.1.1", "10.0.0.1", "172.16.0.1"])
-        
-        payload = {
-            "event_type": evt_type,
-            "src_ip": src_ip,
-            "src_port": random.randint(1024, 65535),
-            "dest_ip": dest_ip,
-            "dest_port": random.choice([80, 443, 8080, 22, 3306]),
-            "proto": "TCP" if evt_type == "alert" else random.choice(["TCP", "UDP"]),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+SOURCE_IPS = ["192.168.1.105", "10.0.0.42", "172.16.0.12", "185.220.101.5", "45.154.255.8"]
+TARGET_IPS = ["10.0.0.1", "10.0.0.2", "192.168.1.1"]
+
+
+def generate_eve_event() -> dict:
+    attack = random.choice(ATTACK_TYPES)
+    src_ip = random.choice(SOURCE_IPS)
+    dest_ip = random.choice(TARGET_IPS)
+
+    return {
+        "event_type": "alert",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "src_ip": src_ip,
+        "src_port": random.randint(1024, 65535),
+        "dest_ip": dest_ip,
+        "dest_port": random.choice([22, 80, 443, 3306, 5432]),
+        "proto": random.choice(["TCP", "UDP"]),
+        "alert": {
+            "action": "allowed",
+            "gid": 1,
+            "signature_id": random.randint(2000000, 2099999),
+            "rev": 1,
+            "signature": attack["signature"],
+            "category": attack["category"],
+            "severity": attack["severity"]
         }
-        
-        if evt_type == "alert":
-            payload["alert"] = {
-                "category": random.choice(CATEGORIES),
-                "signature": f"ET MALWARE Suspicious Activity on {src_ip}",
-                "severity": random.choice(SEVERITIES)
-            }
-            
+    }
+
+
+def main():
+    print("[+] Starting live NEXUS NIDS telemetry generator pipeline...")
+    print(f"[+] Target ingestion endpoint: {API_URL}")
+
+    while True:
         try:
-            res = requests.post(INGEST_URL, json=payload, timeout=5)
-            # Treat both 200 OK and 201 Created as successful ingestion
-            if res.status_code in (200, 201):
-                print(f"[+] [{i}/{count}] Ingested: {src_ip} -> {dest_ip} ({evt_type})")
+            payload = generate_eve_event()
+            res = requests.post(API_URL, json=payload, timeout=5)
+            if res.status_code == 200:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Ingested Event: {payload['alert']['category']} -> {payload['src_ip']}")
             else:
-                print(f"[-] Failed ({res.status_code}): {res.text}")
-        except Exception as e:
-            print(f"[-] Connection Error: {e}")
-            
-        time.sleep(0.1)
+                print(f"[-] Ingestion failed: {res.status_code} - {res.text}")
+        except Exception as err:
+            print(f"[-] Connection error: {err}")
+
+        time.sleep(2)
+
 
 if __name__ == "__main__":
-    generate_events()
+    main()

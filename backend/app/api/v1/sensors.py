@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.rbac import get_current_user
 from app.models.user import User
-from app.models.event import Sensor
+from app.models.sensor import Sensor
 
 router = APIRouter(prefix="/sensors", tags=["Sensor Management"])
 

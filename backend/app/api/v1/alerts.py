@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.rbac import get_current_user
 from app.models.user import User
-from app.models.event import Alert
+from app.models.alert import Alert
 
 router = APIRouter(prefix="/alerts", tags=["Threat Alerts"])
 
