@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timezone
 import requests
 
-API_URL = "http://localhost:8000/api/v1/ingest"
+API_URL = "http://localhost:8000/api/v1/dashboard/ingest"
 
 ATTACK_TYPES = [
     {"signature": "ET EXPLOIT SQL Injection Attempt", "severity": 3, "category": "SQL Injection"},
