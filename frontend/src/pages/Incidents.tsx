@@ -25,11 +25,16 @@ export const Incidents: React.FC = () => {
   const fetchIncidents = async (): Promise<void> => {
     try {
       const token = localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('http://localhost:8000/api/v1/incidents/correlated', {
-        headers: {
-          'Authorization': `Bearer ${token || ''}`,
-          'Content-Type': 'application/json'
-        }
+        headers,
+        credentials: 'include'
       });
 
       if (!response.ok) {

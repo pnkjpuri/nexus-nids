@@ -7,8 +7,9 @@ interface DashboardSummary {
   blocked_attacks: number;
   traffic_analyzed_gb: number;
   active_connections: number;
-  attack_distribution: Record<string, number>;
-  traffic_timeline: { timestamp: string; value: number }[];
+  attack_distribution?: Record<string, number>;
+  top_attack_types?: { type: string; count: number }[];
+  traffic_timeline?: { timestamp: string; value: number }[];
 }
 
 export const Dashboard: React.FC = () => {
@@ -28,11 +29,12 @@ export const Dashboard: React.FC = () => {
       }
 
       const response = await fetch('http://localhost:8000/api/v1/dashboard/summary', {
-        headers
+        headers,
+        credentials: 'include'
       });
 
       if (response.status === 401) {
-        setError('Authentication required. Please log in via Swagger UI (http://localhost:8000/docs) or obtain a token.');
+        setError('Authentication required. Please sign in to view your telemetry.');
         return;
       }
 
@@ -57,7 +59,13 @@ export const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const attackDistribution: Record<string, number> = summary?.attack_distribution || {};
+  const attackDistribution: Record<string, number> = summary?.attack_distribution
+    ? summary.attack_distribution
+    : (summary?.top_attack_types || []).reduce((acc, item) => {
+        acc[item.type] = item.count;
+        return acc;
+      }, {} as Record<string, number>);
+
   const attackCounts: number[] = Object.values(attackDistribution);
   const totalAttackCount: number = attackCounts.reduce((sum: number, val: number) => sum + val, 0);
 
@@ -91,7 +99,7 @@ export const Dashboard: React.FC = () => {
             Refresh
           </button>
           <a
-            href="http://localhost:8000/api/v1/dashboard/export-report"
+            href="http://localhost:8000/api/v1/reports/export"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition shadow-lg shadow-indigo-600/20"
@@ -180,11 +188,11 @@ export const Dashboard: React.FC = () => {
           <div className="h-64 flex items-end justify-between gap-2 pt-8 pb-2 border-b border-slate-800">
             {summary?.traffic_timeline && summary.traffic_timeline.length > 0 ? (
               summary.traffic_timeline.map((point, idx) => {
-                const maxVal = Math.max(...summary.traffic_timeline.map(p => p.value), 1);
+                const maxVal = Math.max(...summary.traffic_timeline!.map(p => p.value), 1);
                 const heightPct = Math.max((point.value / maxVal) * 100, 8);
                 return (
                   <div key={idx} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-                    <div 
+                    <div
                       className="w-full bg-indigo-600/80 hover:bg-indigo-500 rounded-t transition-all"
                       style={{ height: `${heightPct}%` }}
                       title={`${point.timestamp}: ${point.value} events`}
@@ -231,7 +239,7 @@ export const Dashboard: React.FC = () => {
                         <span className="text-slate-400 font-mono">{count} ({percentage}%)</span>
                       </div>
                       <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                        <div 
+                        <div
                           className="bg-indigo-500 h-full rounded-full transition-all duration-500"
                           style={{ width: `${percentage}%` }}
                         />

@@ -2,22 +2,22 @@ import React, { useEffect, useState } from 'react';
 import * as LucideIcons from 'lucide-react';
 
 interface AlertItem {
-  id: string;
+  id: string | number;
   timestamp: string;
   rule_id: string;
-  signature: string;
-  severity: number;
-  source_ip: string;
-  source_port: number;
-  destination_ip: string;
-  destination_port: number;
+  signature?: string;
+  event_type?: string;
+  severity: number | string;
+  src_ip?: string;
+  source_ip?: string;
+  src_port?: number;
+  source_port?: number;
+  dest_ip?: string;
+  destination_ip?: string;
+  dest_port?: number;
+  destination_port?: number;
   protocol: string;
-  status: 'NEW' | 'ACKNOWLEDGED' | 'RESOLVED';
-  cia_impact: {
-    confidentiality: number;
-    integrity: number;
-    availability: number;
-  };
+  status: string;
 }
 
 export const Alerts: React.FC = () => {
@@ -29,11 +29,16 @@ export const Alerts: React.FC = () => {
   const fetchAlerts = async (): Promise<void> => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8000/api/v1/alerts/', {
-        headers: {
-          'Authorization': `Bearer ${token || ''}`,
-          'Content-Type': 'application/json'
-        }
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('http://localhost:8000/api/v1/alerts', {
+        headers,
+        credentials: 'include'
       });
 
       if (!response.ok) {
@@ -51,16 +56,21 @@ export const Alerts: React.FC = () => {
     }
   };
 
-  const updateAlertStatus = async (alertId: string, newStatus: string): Promise<void> => {
+  const updateAlertStatus = async (alertId: string | number, newStatus: string): Promise<void> => {
     try {
       const token = localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch(`http://localhost:8000/api/v1/alerts/${alertId}/status`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token || ''}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ status: newStatus })
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ status: newStatus.toLowerCase() })
       });
 
       if (response.ok) {
@@ -71,28 +81,63 @@ export const Alerts: React.FC = () => {
     }
   };
 
+  const blockIp = async (alertId: string | number): Promise<void> => {
+    try {
+      const token = localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`http://localhost:8000/api/v1/alerts/${alertId}/block-ip`, {
+        method: 'POST',
+        headers,
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        fetchAlerts();
+      }
+    } catch (err: unknown) {
+      console.error('Failed to block IP:', err);
+    }
+  };
+
   useEffect(() => {
     fetchAlerts();
     const interval = setInterval(fetchAlerts, 4000);
     return () => clearInterval(interval);
   }, []);
 
+  const normalizeSeverity = (sev: number | string): 'HIGH' | 'MEDIUM' | 'LOW' => {
+    if (typeof sev === 'number') {
+      if (sev >= 3) return 'HIGH';
+      if (sev === 2) return 'MEDIUM';
+      return 'LOW';
+    }
+    const upper = String(sev || '').toUpperCase();
+    if (upper === 'CRITICAL' || upper === 'HIGH') return 'HIGH';
+    if (upper === 'MEDIUM') return 'MEDIUM';
+    return 'LOW';
+  };
+
   const filteredAlerts = alerts.filter((alert) => {
-    if (filterSeverity === 'HIGH') return alert.severity >= 3;
-    if (filterSeverity === 'MEDIUM') return alert.severity === 2;
-    if (filterSeverity === 'LOW') return alert.severity === 1;
-    return true;
+    if (filterSeverity === 'ALL') return true;
+    return normalizeSeverity(alert.severity) === filterSeverity;
   });
 
-  const getSeverityBadge = (severity: number): React.ReactNode => {
-    if (severity >= 3) {
+  const getSeverityBadge = (severity: number | string): React.ReactNode => {
+    const level = normalizeSeverity(severity);
+    if (level === 'HIGH') {
       return (
         <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
           HIGH
         </span>
       );
     }
-    if (severity === 2) {
+    if (level === 'MEDIUM') {
       return (
         <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
           MEDIUM
@@ -166,43 +211,60 @@ export const Alerts: React.FC = () => {
           </thead>
           <tbody className="divide-y divide-slate-800/60 text-slate-300">
             {filteredAlerts.length > 0 ? (
-              filteredAlerts.map((alert) => (
-                <tr key={alert.id} className="hover:bg-slate-800/30 transition">
-                  <td className="p-4 font-mono text-xs text-slate-400">{alert.timestamp}</td>
-                  <td className="p-4">{getSeverityBadge(alert.severity)}</td>
-                  <td className="p-4 font-semibold text-white">{alert.signature}</td>
-                  <td className="p-4 font-mono text-indigo-400">{alert.source_ip}:{alert.source_port}</td>
-                  <td className="p-4 font-mono text-emerald-400">{alert.destination_ip}:{alert.destination_port}</td>
-                  <td className="p-4 uppercase text-xs font-mono text-slate-400">{alert.protocol}</td>
-                  <td className="p-4">
-                    <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${
-                      alert.status === 'RESOLVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                      alert.status === 'ACKNOWLEDGED' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                    }`}>
-                      {alert.status}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right">
-                    {alert.status === 'NEW' && (
-                      <button
-                        onClick={() => updateAlertStatus(alert.id, 'ACKNOWLEDGED')}
-                        className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded transition mr-2"
-                      >
-                        Acknowledge
-                      </button>
-                    )}
-                    {alert.status !== 'RESOLVED' && (
-                      <button
-                        onClick={() => updateAlertStatus(alert.id, 'RESOLVED')}
-                        className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded transition"
-                      >
-                        Resolve
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))
+              filteredAlerts.map((alert) => {
+                const statusUpper = String(alert.status || 'DETECTED').toUpperCase();
+                const srcIp = alert.src_ip || alert.source_ip || '0.0.0.0';
+                const srcPort = alert.src_port ?? alert.source_port ?? 0;
+                const dstIp = alert.dest_ip || alert.destination_ip || '0.0.0.0';
+                const dstPort = alert.dest_port ?? alert.destination_port ?? 0;
+
+                return (
+                  <tr key={alert.id} className="hover:bg-slate-800/30 transition">
+                    <td className="p-4 font-mono text-xs text-slate-400">{alert.timestamp}</td>
+                    <td className="p-4">{getSeverityBadge(alert.severity)}</td>
+                    <td className="p-4 font-semibold text-white">{alert.signature || alert.event_type || alert.rule_id}</td>
+                    <td className="p-4 font-mono text-indigo-400">{srcIp}:{srcPort}</td>
+                    <td className="p-4 font-mono text-emerald-400">{dstIp}:{dstPort}</td>
+                    <td className="p-4 uppercase text-xs font-mono text-slate-400">{alert.protocol}</td>
+                    <td className="p-4">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${
+                        statusUpper === 'RESOLVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                        statusUpper === 'BLOCKED' ? 'bg-rose-600/20 text-rose-400 border border-rose-500/30' :
+                        statusUpper === 'INVESTIGATING' || statusUpper === 'ACKNOWLEDGED' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                        'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                      }`}>
+                        {statusUpper}
+                      </span>
+                    </td>
+                    <td className="p-4 text-right flex items-center justify-end gap-2">
+                      {statusUpper !== 'BLOCKED' && (
+                        <button
+                          onClick={() => blockIp(alert.id)}
+                          className="text-xs bg-rose-600/80 hover:bg-rose-500 text-white px-2.5 py-1.5 rounded transition font-medium"
+                        >
+                          Block IP
+                        </button>
+                      )}
+                      {statusUpper !== 'INVESTIGATING' && statusUpper !== 'RESOLVED' && statusUpper !== 'BLOCKED' && (
+                        <button
+                          onClick={() => updateAlertStatus(alert.id, 'investigating')}
+                          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded transition"
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                      {statusUpper !== 'RESOLVED' && (
+                        <button
+                          onClick={() => updateAlertStatus(alert.id, 'resolved')}
+                          className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded transition"
+                        >
+                          Resolve
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-slate-500 font-mono text-sm">

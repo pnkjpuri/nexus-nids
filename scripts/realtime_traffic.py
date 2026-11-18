@@ -1,53 +1,136 @@
+import os
 import time
 import random
+import argparse
 import requests
 
 INGEST_URL = "http://localhost:8000/api/v1/ingest"
+DEFAULT_OWNER = os.getenv("NEXUS_OWNER_EMAIL", "pankajpuri761@gmail.com")
 
-ATTACK_SCENARIOS = [
-    {"event_type": "SQL Injection Attempt", "severity": "critical", "description": "Malicious SELECT query detected in HTTP payload", "protocol": "HTTP", "dest_port": 80},
-    {"event_type": "SSH Brute Force Attack", "severity": "high", "description": "Multiple failed root login attempts detected", "protocol": "SSH", "dest_port": 22},
-    {"event_type": "SYN Flood DoS Probe", "severity": "critical", "description": "High frequency TCP SYN flags from single host", "protocol": "TCP", "dest_port": 443},
-    {"event_type": "ICMP Ping Sweep", "severity": "medium", "description": "Network discovery sweep across internal subnet", "protocol": "ICMP", "dest_port": 0},
-    {"event_type": "RDP Access Attempt", "severity": "medium", "description": "Unauthorized Remote Desktop connection request", "protocol": "RDP", "dest_port": 3389},
-    {"event_type": "HTTPS Encrypted Session", "severity": "low", "description": "Normal outbound SSL handshake", "protocol": "TLS", "dest_port": 443}
+ATTACK_WAVES = [
+    {
+        "event_type": "SQL Injection Payload",
+        "severity": "critical",
+        "rule_id": "OWASP-SQLI-942",
+        "protocol": "HTTP",
+        "dest_port": 80,
+        "description": "UNION SELECT authentication bypass pattern in URI query",
+    },
+    {
+        "event_type": "SYN Flood DDoS Attack",
+        "severity": "critical",
+        "rule_id": "NIDS-DOS-201",
+        "protocol": "TCP",
+        "dest_port": 443,
+        "description": "Half-open TCP SYN flood exhausting connection table",
+    },
+    {
+        "event_type": "SSH Brute Force Attempt",
+        "severity": "high",
+        "rule_id": "MITRE-T1110-022",
+        "protocol": "SSH",
+        "dest_port": 22,
+        "description": "Repeated invalid root credential authentication attempts",
+    },
+    {
+        "event_type": "SMB EternalBlue Exploit Probe",
+        "severity": "critical",
+        "rule_id": "CVE-2017-0144",
+        "protocol": "TCP",
+        "dest_port": 445,
+        "description": "Malformed SMBv1 transaction buffer overflow signature",
+    },
+    {
+        "event_type": "DNS Data Exfiltration Tunnel",
+        "severity": "high",
+        "rule_id": "MITRE-T1048-053",
+        "protocol": "UDP",
+        "dest_port": 53,
+        "description": "High-entropy base64 subdomain query detected",
+    },
+    {
+        "event_type": "Nmap SYN Stealth Port Scan",
+        "severity": "medium",
+        "rule_id": "NIDS-SCAN-104",
+        "protocol": "TCP",
+        "dest_port": 8080,
+        "description": "Sequential port enumeration across internal subnet",
+    },
+    {
+        "event_type": "HTTPS Encrypted Session",
+        "severity": "low",
+        "rule_id": "NIDS-TLS-010",
+        "protocol": "TLS",
+        "dest_port": 443,
+        "description": "Standard outbound TLS 1.3 handshake",
+    },
 ]
 
-IPS = ["192.168.29.188", "10.0.0.45", "172.16.0.12", "192.168.1.105", "49.44.137.9"]
+EXTERNAL_ATTACKERS = [
+    "185.220.101.42",
+    "45.33.32.156",
+    "91.134.192.18",
+    "103.21.244.12",
+    "192.168.29.188",
+]
+INTERNAL_TARGETS = ["10.0.0.10", "10.0.0.15", "192.168.29.1", "172.16.1.5"]
+
 
 def main():
-    print("[+] Launching NEXUS NIDS Live Threat Simulator...")
-    print(f"[+] Target Endpoint: {INGEST_URL}")
-    print("[+] Streaming attack patterns to PostgreSQL... Press Ctrl+C to stop.\n")
-    
+    parser = argparse.ArgumentParser(description="NEXUS NIDS Multi-Vector Threat Simulator")
+    parser.add_argument("--owner", default=DEFAULT_OWNER, help="Target user email to receive alerts")
+    args = parser.parse_args()
+
+    owner_email = args.owner.strip().lower()
+    session = requests.Session()
+    session.headers.update({"X-Owner-Email": owner_email})
+
+    print("==========================================================")
+    print("  NEXUS NIDS - Multi-Vector Threat Traffic Simulator")
+    print("==========================================================")
+    print(f"[+] Target Endpoint : {INGEST_URL}")
+    print(f"[+] Target Account  : {owner_email}")
+    print("[+] Press Ctrl+C to stop.\n")
+
     count = 0
-    while True:
-        scenario = random.choice(ATTACK_SCENARIOS)
-        src_ip = random.choice(IPS)
-        dest_ip = "192.168.29.1" if src_ip != "192.168.29.1" else "10.0.0.1"
-        
-        payload = {
-            "event_type": scenario["event_type"],
-            "severity": scenario["severity"],
-            "source_ip": src_ip,
-            "destination_ip": dest_ip,
-            "source_port": random.randint(49152, 65535),
-            "destination_port": scenario["dest_port"],
-            "protocol": scenario["protocol"],
-            "description": scenario["description"]
-        }
-        
-        try:
-            res = requests.post(INGEST_URL, json=payload, timeout=2)
-            if res.status_code in [200, 201]:
-                count += 1
-                print(f"[{count}] Live Event Ingested: {scenario['event_type']} ({scenario['severity'].upper()}) -> {src_ip}")
-            else:
-                print(f"[-] Failed [{res.status_code}]: {res.text}")
-        except Exception as e:
-            print(f"[-] Connection Error: {e}")
-            
-        time.sleep(0.8)
+    try:
+        while True:
+            scenario = random.choice(ATTACK_WAVES)
+            src_ip = random.choice(EXTERNAL_ATTACKERS)
+            dest_ip = random.choice(INTERNAL_TARGETS)
+
+            payload = {
+                "owner_email": owner_email,
+                "event_type": scenario["event_type"],
+                "severity": scenario["severity"],
+                "rule_id": scenario["rule_id"],
+                "source_ip": src_ip,
+                "destination_ip": dest_ip,
+                "source_port": random.randint(49152, 65535),
+                "destination_port": scenario["dest_port"],
+                "protocol": scenario["protocol"],
+                "description": scenario["description"],
+            }
+
+            try:
+                res = session.post(INGEST_URL, json=payload, timeout=2.0)
+                if res.status_code in (200, 201):
+                    count += 1
+                    print(
+                        f"[SIM #{count}] [{owner_email}] [{scenario['severity'].upper():<8}] "
+                        f"{scenario['event_type']:<30} | {src_ip} -> {dest_ip}:{scenario['dest_port']}"
+                    )
+                else:
+                    print(f"[-] HTTP {res.status_code}: {res.text}")
+            except requests.exceptions.RequestException as e:
+                print(f"[-] Connection Error: {e}")
+                time.sleep(2.0)
+
+            time.sleep(random.uniform(0.3, 1.1))
+
+    except KeyboardInterrupt:
+        print(f"\n[+] Simulation stopped cleanly. Total events streamed: {count}")
+
 
 if __name__ == "__main__":
     main()
