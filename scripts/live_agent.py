@@ -9,7 +9,7 @@ import requests
 from scapy.all import sniff, IP, TCP, UDP, ICMP, conf
 
 INGEST_URL = "http://localhost:8000/api/v1/ingest"
-DEFAULT_OWNER = os.getenv("NEXUS_OWNER_EMAIL", "pankajpuri761@gmail.com")
+DEFAULT_OWNER = os.getenv("NEXUS_OWNER_EMAIL", "analyst@example.com")
 
 event_queue = queue.Queue(maxsize=2000)
 ip_packet_tracker = defaultdict(list)

@@ -28,3 +28,9 @@ frontend/build/
 .idea/
 .DS_Store
 Thumbs.db
+
+.env
+*.docx
+*.pcap
+*.log
+.venv/

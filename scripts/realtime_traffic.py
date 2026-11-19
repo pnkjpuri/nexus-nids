@@ -1,11 +1,11 @@
-﻿import os
+import os
 import time
 import random
 import argparse
 import requests
 
 INGEST_URL = "http://localhost:8000/api/v1/ingest"
-DEFAULT_OWNER = os.getenv("NEXUS_OWNER_EMAIL", "pankajpuri761@gmail.com")
+DEFAULT_OWNER = os.getenv("NEXUS_OWNER_EMAIL", "analyst@example.com")
 
 ATTACK_WAVES = [
     {
