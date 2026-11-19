@@ -1,8 +1,9 @@
-﻿import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import {
   Shield, LayoutDashboard, AlertTriangle, Activity, BarChart2,
   FileText, Sliders, Server, Settings, Download, Cpu, HardDrive,
-  Database, CheckCircle2, Play, Lock, KeyRound, History, ShieldBan, Trash2, Plus
+  Database, CheckCircle2, Play, Lock, KeyRound, History, ShieldBan,
+  Trash2, Plus, Camera, ZoomIn, ZoomOut, Save, User, Monitor, Laptop
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthPage } from './pages/AuthPage';
@@ -11,9 +12,20 @@ import { Dashboard } from './pages/Dashboard';
 import { AlertsPage } from './pages/AlertsPage';
 import { apiRequest } from './services/api';
 
+const VALID_TABS = new Set([
+  'dashboard', 'alerts', 'firewall', 'traffic', 'analysis',
+  'reports', 'rules', 'system', 'settings',
+  'profile', 'profile-security', 'profile-preferences', 'profile-sessions',
+]);
+
+const getInitialTab = (): string => {
+  const hash = window.location.hash.replace('#', '').trim();
+  return VALID_TABS.has(hash) ? hash : 'dashboard';
+};
+
 const NidsAuthenticatedShell: React.FC = () => {
-  const { user, loading } = useAuth();
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const { user, loading, refreshUser } = useAuth() as any;
+  const [activeTab, setActiveTab] = useState<string>(getInitialTab);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [rules, setRules] = useState<any[]>([]);
@@ -29,6 +41,65 @@ const NidsAuthenticatedShell: React.FC = () => {
   const [mfaSetup, setMfaSetup] = useState<any>(null);
   const [mfaCode, setMfaCode] = useState('');
 
+  // Profile & Avatar Resizer State
+  const [fullName, setFullName] = useState('');
+  const [department, setDepartment] = useState('Security Operations Center');
+  const [rawImage, setRawImage] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number>(1);
+  const [offsetX, setOffsetX] = useState<number>(0);
+  const [offsetY, setOffsetY] = useState<number>(0);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileStatus, setProfileStatus] = useState('');
+  const [prefs, setPrefs] = useState({
+    desktopAlerts: true,
+    autoHighlightCritical: true,
+    liveSound: false,
+  });
+  const avatarCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const navigateToTab = (tabId: string) => {
+    setActiveTab(tabId);
+    if (window.location.hash !== `#${tabId}`) {
+      window.history.pushState(null, '', `#${tabId}`);
+    }
+  };
+
+  useEffect(() => {
+    const onHashChange = () => setActiveTab(getInitialTab());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      setFullName(user.full_name || user.email?.split('@')[0] || '');
+      setDepartment(user.department || 'Security Operations Center');
+    }
+  }, [user]);
+
+  // Draw resized & cropped avatar preview on 220x220 canvas
+  useEffect(() => {
+    if (!rawImage || !avatarCanvasRef.current) return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = avatarCanvasRef.current!;
+      const ctx = canvas.getContext('2d')!;
+      const size = 220;
+      canvas.width = size;
+      canvas.height = size;
+      ctx.clearRect(0, 0, size, size);
+
+      const baseScale = Math.max(size / img.width, size / img.height);
+      const scale = baseScale * zoom;
+      const drawW = img.width * scale;
+      const drawH = img.height * scale;
+      const dx = (size - drawW) / 2 + offsetX;
+      const dy = (size - drawH) / 2 + offsetY;
+      ctx.drawImage(img, dx, dy, drawW, drawH);
+    };
+    img.src = rawImage;
+  }, [rawImage, zoom, offsetX, offsetY]);
+
   useEffect(() => {
     if (!user) return;
     if (activeTab === 'rules') {
@@ -39,10 +110,11 @@ const NidsAuthenticatedShell: React.FC = () => {
       apiRequest('/system/metrics').then(setSysMetrics).catch(() => {});
     } else if (activeTab === 'traffic' || activeTab === 'analysis') {
       apiRequest('/alerts?limit=50').then(setTrafficFeed).catch(() => {});
-    } else if (activeTab === 'settings') {
+    } else if (activeTab === 'settings' || activeTab === 'profile-sessions') {
       apiRequest('/auth/sessions').then(setSessions).catch(() => {});
-      if (user.role === 'admin' || user.role === 'analyst') {
-        apiRequest('/audit-logs').then(setAuditLogs).catch(() => {});
+      // STRICT ADMIN-ONLY CHECK for Audit Logs
+      if (activeTab === 'settings' && user.role?.toLowerCase() === 'admin') {
+        apiRequest('/audit-logs').then(setAuditLogs).catch(() => setAuditLogs([]));
       }
     }
   }, [activeTab, user]);
@@ -58,6 +130,8 @@ const NidsAuthenticatedShell: React.FC = () => {
   if (!user) {
     return <AuthPage />;
   }
+
+  const isAdmin = user.role?.toLowerCase() === 'admin';
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -119,11 +193,67 @@ const NidsAuthenticatedShell: React.FC = () => {
     setSessions(updated);
   };
 
+  const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRawImage(reader.result as string);
+      setZoom(1);
+      setOffsetX(0);
+      setOffsetY(0);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingProfile(true);
+    setProfileStatus('');
+    try {
+      let finalAvatar = user.avatar_url || null;
+      if (rawImage && avatarCanvasRef.current) {
+        finalAvatar = avatarCanvasRef.current.toDataURL('image/jpeg', 0.88);
+      }
+      await apiRequest('/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          full_name: fullName,
+          department,
+          avatar_url: finalAvatar,
+        }),
+      });
+      if (typeof refreshUser === 'function') {
+        await refreshUser();
+      }
+      setRawImage(null);
+      setProfileStatus('Profile & resized avatar saved successfully.');
+    } catch {
+      setProfileStatus('Failed to save profile updates.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const profileSubTabs = [
+    { id: 'profile', label: 'My Profile', icon: User },
+    { id: 'profile-security', label: 'Account & Security (MFA)', icon: Shield },
+    { id: 'profile-preferences', label: 'Preferences', icon: Sliders },
+    { id: 'profile-sessions', label: 'Active Sessions', icon: Monitor },
+  ];
+
   return (
     <div className="flex h-screen bg-[#0a0d14] text-slate-100 font-sans overflow-hidden">
       <aside className="w-64 bg-[#0e131f] border-r border-slate-800/80 flex flex-col justify-between shrink-0">
         <div>
-          <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-800/80">
+          <a
+            href="#dashboard"
+            onClick={(e) => {
+              e.preventDefault();
+              navigateToTab('dashboard');
+            }}
+            className="flex items-center gap-3 px-6 py-5 border-b border-slate-800/80 hover:bg-slate-800/30 transition-colors"
+          >
             <div className="p-2 bg-indigo-600/20 border border-indigo-500/40 rounded-lg">
               <Shield className="w-6 h-6 text-indigo-400" />
             </div>
@@ -133,25 +263,30 @@ const NidsAuthenticatedShell: React.FC = () => {
                 v2.1.0
               </span>
             </div>
-          </div>
+          </a>
 
+          {/* Real <a href="#..."> links enable native browser right-click (Open in new tab / incognito) */}
           <nav className="p-4 space-y-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               return (
-                <button
+                <a
                   key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  href={`#${item.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigateToTab(item.id);
+                  }}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
                     isActive
-                      ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30'
-                      : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                      ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 translate-x-0.5'
+                      : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'
                   }`}
                 >
                   <Icon className="w-5 h-5" />
                   {item.label}
-                </button>
+                </a>
               );
             })}
           </nav>
@@ -172,10 +307,11 @@ const NidsAuthenticatedShell: React.FC = () => {
         <TopNavbar
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
-          onNavigate={setActiveTab}
+          onNavigate={navigateToTab}
         />
 
-        <main className="flex-1 overflow-y-auto bg-[#0a0d14] p-6">
+        {/* key={activeTab} + animate-page-enter gives smooth transition on every tab switch */}
+        <main key={activeTab} className="flex-1 overflow-y-auto bg-[#0a0d14] p-6 animate-page-enter">
           {activeTab === 'dashboard' && <Dashboard />}
 
           {activeTab === 'alerts' && <AlertsPage />}
@@ -486,7 +622,7 @@ const NidsAuthenticatedShell: React.FC = () => {
                         <td className="py-3 px-4 uppercase text-[11px]">{r.severity}</td>
                         <td className="py-3 px-4">
                           <button
-                            disabled={user.role !== 'admin'}
+                            disabled={!isAdmin}
                             onClick={() => handleToggleRule(r.id)}
                             className={`px-3 py-1 rounded text-xs font-medium ${
                               r.enabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
@@ -552,8 +688,10 @@ const NidsAuthenticatedShell: React.FC = () => {
           {activeTab === 'settings' && (
             <div className="space-y-6">
               <div>
-                <h1 className="text-xl font-bold text-white">Security Settings, MFA & Immutable Audit Trail</h1>
-                <p className="text-xs text-slate-400">Configure TOTP Two-Factor Authentication, active sessions & RBAC audit records</p>
+                <h1 className="text-xl font-bold text-white">Security Settings, MFA & Governance</h1>
+                <p className="text-xs text-slate-400">
+                  Configure TOTP Two-Factor Authentication, active sessions{isAdmin ? ' & RBAC audit records' : ''}
+                </p>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -616,37 +754,289 @@ const NidsAuthenticatedShell: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-3">
-                <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
-                  <History className="w-4 h-4 text-amber-400" /> Immutable Security Audit Trail
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="border-b border-slate-800 text-slate-400 uppercase text-[11px]">
-                      <tr>
-                        <th className="py-2 px-3">Timestamp</th>
-                        <th className="py-2 px-3">Actor</th>
-                        <th className="py-2 px-3">Role</th>
-                        <th className="py-2 px-3">Action</th>
-                        <th className="py-2 px-3">Resource</th>
-                        <th className="py-2 px-3">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 font-mono">
-                      {auditLogs.map((log) => (
-                        <tr key={log.id}>
-                          <td className="py-2 px-3 text-slate-400">{new Date(log.created_at).toLocaleString()}</td>
-                          <td className="py-2 px-3 text-slate-200">{log.actor_email}</td>
-                          <td className="py-2 px-3 uppercase text-indigo-400">{log.actor_role}</td>
-                          <td className="py-2 px-3 text-cyan-400">{log.action}</td>
-                          <td className="py-2 px-3 text-slate-300">{log.resource}</td>
-                          <td className="py-2 px-3 text-slate-400 font-sans">{log.details}</td>
+              {/* ADMIN ONLY: Analysts cannot see login/logout audit logs */}
+              {isAdmin && (
+                <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
+                    <History className="w-4 h-4 text-amber-400" /> Immutable Security Audit Trail (Admin Only)
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-b border-slate-800 text-slate-400 uppercase text-[11px]">
+                        <tr>
+                          <th className="py-2 px-3">Timestamp</th>
+                          <th className="py-2 px-3">Actor</th>
+                          <th className="py-2 px-3">Role</th>
+                          <th className="py-2 px-3">Action</th>
+                          <th className="py-2 px-3">Resource</th>
+                          <th className="py-2 px-3">Details</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono">
+                        {auditLogs.map((log) => (
+                          <tr key={log.id}>
+                            <td className="py-2 px-3 text-slate-400">{new Date(log.created_at).toLocaleString()}</td>
+                            <td className="py-2 px-3 text-slate-200">{log.actor_email}</td>
+                            <td className="py-2 px-3 uppercase text-indigo-400">{log.actor_role}</td>
+                            <td className="py-2 px-3 text-cyan-400">{log.action}</td>
+                            <td className="py-2 px-3 text-slate-300">{log.resource}</td>
+                            <td className="py-2 px-3 text-slate-400 font-sans">{log.details}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* DEDICATED PROFILE & ACCOUNT SUB-PAGES */}
+          {activeTab.startsWith('profile') && (
+            <div className="max-w-5xl mx-auto space-y-6">
+              <div>
+                <h1 className="text-xl font-bold text-white">Operator Account & Profile Center</h1>
+                <p className="text-xs text-slate-400">
+                  Edit your operator profile, upload & resize your avatar photo, configure MFA, and inspect sessions
+                </p>
               </div>
+
+              <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
+                {profileSubTabs.map((sub) => {
+                  const Icon = sub.icon;
+                  const active = activeTab === sub.id;
+                  return (
+                    <a
+                      key={sub.id}
+                      href={`#${sub.id}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigateToTab(sub.id);
+                      }}
+                      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+                        active
+                          ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/40'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span>{sub.label}</span>
+                    </a>
+                  );
+                })}
+              </div>
+
+              {activeTab === 'profile' && (
+                <form onSubmit={handleSaveProfile} className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 flex flex-col items-center space-y-4">
+                    <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400 self-start">
+                      Profile Picture
+                    </h2>
+
+                    <div className="w-44 h-44 rounded-full overflow-hidden border-2 border-indigo-500/50 bg-[#0B0F19] flex items-center justify-center shadow-lg">
+                      {rawImage ? (
+                        <canvas ref={avatarCanvasRef} className="w-full h-full object-cover" />
+                      ) : user.avatar_url ? (
+                        <img src={user.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-4xl font-bold text-indigo-400">
+                          {fullName?.charAt(0)?.toUpperCase() || 'U'}
+                        </span>
+                      )}
+                    </div>
+
+                    <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition-colors">
+                      <Camera className="w-4 h-4 text-indigo-400" />
+                      <span>Upload & Resize Photo</span>
+                      <input type="file" accept="image/*" onChange={handleAvatarFile} className="hidden" />
+                    </label>
+
+                    {rawImage && (
+                      <div className="w-full space-y-3 pt-3 border-t border-slate-800">
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span className="flex items-center gap-1"><ZoomOut className="w-3.5 h-3.5" /> Zoom</span>
+                          <span>{Math.round(zoom * 100)}%</span>
+                          <ZoomIn className="w-3.5 h-3.5" />
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="2.5"
+                          step="0.05"
+                          value={zoom}
+                          onChange={(e) => setZoom(parseFloat(e.target.value))}
+                          className="w-full accent-indigo-500"
+                        />
+                        <div className="grid grid-cols-2 gap-3 text-[11px] text-slate-400">
+                          <label>
+                            Pan X
+                            <input
+                              type="range"
+                              min="-80"
+                              max="80"
+                              value={offsetX}
+                              onChange={(e) => setOffsetX(parseInt(e.target.value))}
+                              className="w-full accent-indigo-500 mt-1"
+                            />
+                          </label>
+                          <label>
+                            Pan Y
+                            <input
+                              type="range"
+                              min="-80"
+                              max="80"
+                              value={offsetY}
+                              onChange={(e) => setOffsetY(parseInt(e.target.value))}
+                              className="w-full accent-indigo-500 mt-1"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-2 bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
+                    <h2 className="text-sm font-semibold text-white">Operator Identity Details</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">Full Name</label>
+                        <input
+                          type="text"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          className="w-full px-3.5 py-2 rounded-lg bg-[#0B0F19] border border-slate-700 text-white text-xs focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">Email Address</label>
+                        <input
+                          type="email"
+                          value={user.email || ''}
+                          disabled
+                          className="w-full px-3.5 py-2 rounded-lg bg-[#0B0F19]/50 border border-slate-800 text-slate-400 text-xs cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">Assigned Role</label>
+                        <input
+                          type="text"
+                          value={(user.role || 'ANALYST').toUpperCase()}
+                          disabled
+                          className="w-full px-3.5 py-2 rounded-lg bg-[#0B0F19]/50 border border-slate-800 text-cyan-400 font-semibold text-xs cursor-not-allowed"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">SOC Unit / Department</label>
+                        <input
+                          type="text"
+                          value={department}
+                          onChange={(e) => setDepartment(e.target.value)}
+                          className="w-full px-3.5 py-2 rounded-lg bg-[#0B0F19] border border-slate-700 text-white text-xs focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {profileStatus && (
+                      <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3.5 py-2.5 rounded-lg">
+                        {profileStatus}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={savingProfile}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      <Save className="w-4 h-4" />
+                      <span>{savingProfile ? 'Saving...' : 'Save Profile & Avatar'}</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {activeTab === 'profile-security' && (
+                <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+                  <h3 className="text-sm font-semibold flex items-center gap-2 text-cyan-400">
+                    <KeyRound className="w-4 h-4" /> Multi-Factor Authentication (TOTP)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Status: <strong className="text-slate-200">{user.mfa_enabled ? 'Enabled' : 'Not Configured'}</strong>
+                  </p>
+                  {!user.mfa_enabled && !mfaSetup && (
+                    <button
+                      onClick={handleGenerateMfa}
+                      className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-medium"
+                    >
+                      Generate TOTP Authenticator Secret
+                    </button>
+                  )}
+                  {mfaSetup && (
+                    <div className="space-y-3 bg-[#0B0F19] p-4 rounded-lg border border-slate-800 text-xs">
+                      <p className="text-slate-300">Secret Key: <code className="text-cyan-400 font-mono">{mfaSetup.secret}</code></p>
+                      <div className="flex gap-2">
+                        <input
+                          value={mfaCode}
+                          onChange={(e) => setMfaCode(e.target.value)}
+                          placeholder="Enter 6-digit code"
+                          className="bg-[#111827] border border-slate-700 rounded px-3 py-1.5 font-mono"
+                        />
+                        <button
+                          onClick={handleEnableMfa}
+                          className="px-3 py-1.5 rounded bg-emerald-600 text-white font-medium"
+                        >
+                          Verify & Enable
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'profile-preferences' && (
+                <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+                  <h3 className="text-sm font-semibold text-white">SOC Console Display & Alert Preferences</h3>
+                  <label className="flex items-center justify-between p-3.5 rounded-lg bg-[#0B0F19] border border-slate-800 cursor-pointer text-xs">
+                    <span>Real-time Desktop Threat Notifications</span>
+                    <input
+                      type="checkbox"
+                      checked={prefs.desktopAlerts}
+                      onChange={(e) => setPrefs({ ...prefs, desktopAlerts: e.target.checked })}
+                      className="accent-indigo-500"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between p-3.5 rounded-lg bg-[#0B0F19] border border-slate-800 cursor-pointer text-xs">
+                    <span>Auto-Highlight Critical Severity Threats</span>
+                    <input
+                      type="checkbox"
+                      checked={prefs.autoHighlightCritical}
+                      onChange={(e) => setPrefs({ ...prefs, autoHighlightCritical: e.target.checked })}
+                      className="accent-indigo-500"
+                    />
+                  </label>
+                </div>
+              )}
+
+              {activeTab === 'profile-sessions' && (
+                <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-white">Active Authenticated Sessions ({sessions.length})</h3>
+                    <button onClick={handleRevokeSessions} className="text-xs text-red-400 hover:underline">
+                      Terminate Other Sessions
+                    </button>
+                  </div>
+                  <div className="space-y-2 text-xs">
+                    {sessions.map((s) => (
+                      <div key={s.id} className="p-3 rounded-lg bg-[#0B0F19] border border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-2.5 truncate max-w-lg">
+                          <Laptop className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <span className="truncate text-slate-300">{s.user_agent}</span>
+                        </div>
+                        <span className="text-emerald-400 font-mono">{s.current ? 'Current' : s.ip_address}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </main>

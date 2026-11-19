@@ -6,6 +6,7 @@ import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import Request, HTTPException, Depends
+from jose import jwt
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -15,6 +16,9 @@ ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 
 SESSION_COOKIE_NAME = "nexus_session"
 SESSION_TTL_HOURS = 12
+SECRET_KEY = os.getenv("SECRET_KEY", "change_this_to_a_random_32_byte_string")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
 
 def hash_password(plain: str) -> str:
@@ -28,6 +32,15 @@ def verify_password(plain: str, hashed: Optional[str]) -> bool:
         return ph.verify(hashed, plain)
     except VerifyMismatchError:
         return False
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + (
+        expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def generate_totp_secret() -> str:

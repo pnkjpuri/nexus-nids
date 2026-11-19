@@ -10,6 +10,7 @@ export interface UserProfile {
   is_verified: boolean;
   mfa_enabled: boolean;
   oauth_provider: string;
+  department?: string;
   preferences: { theme?: string; language?: string; notifications?: boolean };
 }
 
