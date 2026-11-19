@@ -41,3 +41,4 @@ class Alert(Base):
     destination_ip = Column(String(100), nullable=True)
     source_port = Column(Integer, nullable=True)
     destination_port = Column(Integer, nullable=True)
+

@@ -9,12 +9,13 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthPage } from './pages/AuthPage';
 import { TopNavbar } from './components/TopNavbar';
 import { Dashboard } from './pages/Dashboard';
+import { Admin } from './pages/Admin';
 import { AlertsPage } from './pages/AlertsPage';
 import { apiRequest } from './services/api';
 
 const VALID_TABS = new Set([
   'dashboard', 'alerts', 'firewall', 'traffic', 'analysis',
-  'reports', 'rules', 'system', 'settings',
+  'reports', 'rules', 'system', 'settings', 'admin',
   'profile', 'profile-security', 'profile-preferences', 'profile-sessions',
 ]);
 
@@ -50,6 +51,9 @@ const NidsAuthenticatedShell: React.FC = () => {
   const [offsetY, setOffsetY] = useState<number>(0);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileStatus, setProfileStatus] = useState('');
+  const [username, setUsername] = useState(user?.username || '');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [prefs, setPrefs] = useState({
     desktopAlerts: true,
     autoHighlightCritical: true,
@@ -74,6 +78,7 @@ const NidsAuthenticatedShell: React.FC = () => {
     if (user) {
       setFullName(user.full_name || user.email?.split('@')[0] || '');
       setDepartment(user.department || 'Security Operations Center');
+      setUsername(user.username || '');
     }
   }, [user]);
 
@@ -143,6 +148,7 @@ const NidsAuthenticatedShell: React.FC = () => {
     { id: 'rules', label: 'Rules', icon: Sliders },
     { id: 'system', label: 'System', icon: Server },
     { id: 'settings', label: 'Settings', icon: Settings },
+    ...(isAdmin ? [{ id: 'admin', label: 'Administration', icon: Shield }] : []),
   ];
 
   const handleToggleRule = async (ruleId: string) => {
@@ -215,10 +221,11 @@ const NidsAuthenticatedShell: React.FC = () => {
       if (rawImage && avatarCanvasRef.current) {
         finalAvatar = avatarCanvasRef.current.toDataURL('image/jpeg', 0.88);
       }
-      await apiRequest('/profile', {
+      await apiRequest('/enterprise/profile', {
         method: 'PUT',
         body: JSON.stringify({
           full_name: fullName,
+          username,
           department,
           avatar_url: finalAvatar,
         }),
@@ -228,8 +235,8 @@ const NidsAuthenticatedShell: React.FC = () => {
       }
       setRawImage(null);
       setProfileStatus('Profile & resized avatar saved successfully.');
-    } catch {
-      setProfileStatus('Failed to save profile updates.');
+    } catch (err) {
+      setProfileStatus(err instanceof Error ? err.message : 'Failed to save profile updates.');
     } finally {
       setSavingProfile(false);
     }
@@ -313,6 +320,7 @@ const NidsAuthenticatedShell: React.FC = () => {
         {/* key={activeTab} + animate-page-enter gives smooth transition on every tab switch */}
         <main key={activeTab} className="flex-1 overflow-y-auto bg-[#0a0d14] p-6 animate-page-enter">
           {activeTab === 'dashboard' && <Dashboard />}
+          {activeTab === 'admin' && isAdmin && <Admin />}
 
           {activeTab === 'alerts' && <AlertsPage />}
 
@@ -899,6 +907,10 @@ const NidsAuthenticatedShell: React.FC = () => {
                     <h2 className="text-sm font-semibold text-white">Operator Identity Details</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">Unique Username</label>
+                        <input type="text" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} placeholder="choose_username" minLength={3} maxLength={32} pattern="[a-z][a-z0-9_]{2,31}" title="3–32 characters, lowercase letters, digits and underscores; start with a letter" className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-sm" />
+                      </div>
+                      <div>
                         <label className="block text-xs text-slate-400 mb-1.5">Full Name</label>
                         <input
                           type="text"
@@ -954,6 +966,26 @@ const NidsAuthenticatedShell: React.FC = () => {
                 </form>
               )}
 
+              {activeTab === 'profile' && (
+                <section className="bg-[#111827] border border-rose-900/60 rounded-xl p-5 space-y-3">
+                  <h3 className="text-rose-300 font-semibold">Data & Privacy</h3>
+                  <p className="text-xs text-slate-400">Delete your owned monitoring alerts. Account and security audit logs are retained.</p>
+                  {!deleteOpen ? <button onClick={() => setDeleteOpen(true)} className="px-3 py-2 bg-rose-900/40 border border-rose-700 rounded-lg text-sm">Delete My Alert History</button> :
+                    <div role="dialog" aria-label="Confirm deletion" className="space-y-2">
+                      <p className="text-sm text-rose-300">Permanently delete all your saved alerts? This cannot be undone.</p>
+                      <button onClick={() => setDeleteOpen(false)} className="px-3 py-2 bg-slate-700 rounded-lg mr-2">Cancel</button>
+                      <button disabled={deleting} onClick={async () => {
+                        setDeleting(true);
+                        try {
+                          const result = await apiRequest('/enterprise/history', { method: 'DELETE' });
+                          setProfileStatus(`Deleted ${result.deleted_alerts} alert records.`);
+                          setDeleteOpen(false);
+                        } catch (err) { setProfileStatus(err instanceof Error ? err.message : 'Deletion failed'); }
+                        finally { setDeleting(false); }
+                      }} className="px-3 py-2 bg-rose-700 rounded-lg disabled:opacity-50">{deleting ? 'Deleting…' : 'Confirm Permanent Deletion'}</button>
+                    </div>}
+                </section>
+              )}
               {activeTab === 'profile-security' && (
                 <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
                   <h3 className="text-sm font-semibold flex items-center gap-2 text-cyan-400">

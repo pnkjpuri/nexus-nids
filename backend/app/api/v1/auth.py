@@ -96,7 +96,7 @@ def register(payload: RegisterPayload, request: Request, response: Response, db:
         email=email,
         full_name=payload.full_name.strip(),
         hashed_password=hash_password(payload.password),
-        role=payload.role if payload.role in ("admin", "analyst", "viewer") else "analyst",
+        role="analyst",
         is_active=True,
     )
     db.add(user)
@@ -119,6 +119,7 @@ def register(payload: RegisterPayload, request: Request, response: Response, db:
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
+            "username": user.username,
             "role": user.role,
             "avatar_url": user.avatar_url,
             "mfa_enabled": user.mfa_enabled,
@@ -149,6 +150,7 @@ def login(payload: LoginPayload, request: Request, response: Response, db: Sessi
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
+            "username": user.username,
             "role": user.role,
             "avatar_url": user.avatar_url,
             "mfa_enabled": user.mfa_enabled,
@@ -165,6 +167,7 @@ def get_me(request: Request, current_user: User = Depends(get_current_user)):
             "id": current_user.id,
             "email": current_user.email,
             "full_name": current_user.full_name,
+            "username": current_user.username,
             "role": current_user.role,
             "department": current_user.department,
             "avatar_url": current_user.avatar_url,

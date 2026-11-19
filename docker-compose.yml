@@ -33,7 +33,7 @@ services:
       - POSTGRES_PORT=5432
       - SECRET_KEY=${SECRET_KEY:-change_this_to_a_random_32_byte_string}
       - SESSION_SECRET_KEY=${SESSION_SECRET_KEY:-nexus_nids_session_secret_key_super_secure_2026}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-nexus_secure_pass}@db:5432/${POSTGRES_DB:-nexus_db}
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-nexus_secure_pass}@db:5432/${POSTGRES_DB:-nexus_db}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}

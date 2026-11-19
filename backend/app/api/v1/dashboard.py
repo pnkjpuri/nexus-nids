@@ -1,72 +1,61 @@
-from collections import deque
+from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.alert import Alert
+from app.core.security import get_current_user
+from app.models.enterprise import User
 
 router = APIRouter()
 
-_TELEMETRY_BUFFER: deque = deque(maxlen=60)
-
 
 def record_telemetry_tick(tick: Dict[str, Any]) -> None:
-    _TELEMETRY_BUFFER.append(tick)
-
-
-def _get_or_seed_ticks() -> List[Dict[str, Any]]:
-    if not _TELEMETRY_BUFFER:
-        now = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        _TELEMETRY_BUFFER.append(
-            {
-                "time": now,
-                "pps": 420,
-                "threats": 0,
-                "src_ip": "10.0.14.22",
-                "vector": "Normal TLS",
-            }
-        )
-    return list(_TELEMETRY_BUFFER)
+    """Legacy hook; no simulated detections are included in real attack metrics."""
+    return None
 
 
 @router.get("/telemetry/live")
-def get_live_telemetry(db: Session = Depends(get_db)):
-    ticks = _get_or_seed_ticks()
-    latest = ticks[-1]
-    total_alerts = db.query(Alert).count()
-    critical_alerts = db.query(Alert).filter(Alert.severity == "critical").count()
-    blocked_attacks = db.query(Alert).filter(Alert.action == "blocked").count()
-
-    vector_counts: Dict[str, int] = {}
-    for item in ticks:
-        vec = item.get("vector", "Normal TLS")
-        if vec != "Normal TLS":
-            vector_counts[vec] = vector_counts.get(vec, 0) + max(1, int(item.get("threats", 1)))
-
-    top_attack_types = [
-        {"name": name, "count": count}
-        for name, count in sorted(vector_counts.items(), key=lambda x: x[1], reverse=True)
-    ]
-
-    return {
-        "status": "online",
-        "latest": latest,
-        "series": ticks,
-        "kpis": {
-            "total_alerts": total_alerts,
-            "critical_alerts": critical_alerts,
-            "blocked_attacks": blocked_attacks,
-            "traffic_gb": round(sum(t.get("pps", 0) for t in ticks) * 0.00012, 2),
-            "active_connections": latest.get("pps", 320),
-        },
-        "top_attack_types": top_attack_types,
-    }
-
-
 @router.get("/stats")
 @router.get("/summary")
-def get_dashboard_summary(db: Session = Depends(get_db)):
-    return get_live_telemetry(db=db)
+def get_dashboard_summary(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    query = db.query(Alert)
+    if user.role != "admin":
+        query = query.filter(Alert.owner_id == user.id)
+    alerts = query.order_by(Alert.timestamp.desc()).limit(500).all()
+    total = query.count()
+    critical = query.filter(Alert.severity.ilike("critical")).count()
+    blocked = query.filter(Alert.action.ilike("blocked")).count()
+
+    categories = Counter((a.category or a.event_type or "Unclassified").strip() for a in alerts)
+    # Actual stored detections, not random demo traffic.
+    bucket_counts = Counter()
+    for alert in alerts:
+        if alert.timestamp:
+            bucket_counts[alert.timestamp.strftime("%H:%M")] += 1
+    timeline = [{"timestamp": k, "value": v} for k, v in sorted(bucket_counts.items())][-24:]
+    top = [{"name": name, "count": count} for name, count in categories.most_common(8)]
+    return {
+        "status": "online",
+        "series": [],
+        "latest": None,
+        "kpis": {
+            "total_alerts": total,
+            "critical_alerts": critical,
+            "blocked_attacks": blocked,
+            "traffic_gb": 0.0,
+            "active_connections": 0,
+        },
+        "total_alerts": total,
+        "critical_alerts": critical,
+        "blocked_attacks": blocked,
+        # No packet-capture counters exist here; do not fabricate traffic volumes.
+        "traffic_analyzed_gb": 0.0,
+        "active_connections": 0,
+        "attack_distribution": dict(categories),
+        "top_attack_types": top,
+        "traffic_timeline": timeline,
+    }

@@ -29,6 +29,10 @@ settings = Settings()
 # Construct DATABASE_URL if not provided directly
 if not settings.DATABASE_URL:
     settings.DATABASE_URL = (
-        f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
+        f"postgresql+psycopg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
         f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
     )
+# psycopg v3 is installed by this project; avoid requiring the legacy psycopg2 driver.
+if settings.DATABASE_URL.startswith("postgresql://"):
+    settings.DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+

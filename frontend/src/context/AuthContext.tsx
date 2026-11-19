@@ -5,6 +5,7 @@ export interface UserProfile {
   id: string;
   email: string;
   full_name: string;
+  username?: string;
   role: "admin" | "analyst" | "viewer";
   avatar_url?: string;
   is_verified: boolean;

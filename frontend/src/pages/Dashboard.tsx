@@ -8,7 +8,7 @@ interface DashboardSummary {
   traffic_analyzed_gb: number;
   active_connections: number;
   attack_distribution?: Record<string, number>;
-  top_attack_types?: { type: string; count: number }[];
+  top_attack_types?: { name: string; count: number }[];
   traffic_timeline?: { timestamp: string; value: number }[];
 }
 
@@ -59,10 +59,61 @@ export const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [simStatus, setSimStatus] = useState<string | null>(null);
+  const exportReport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/reports/export?format=csv', {
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error(`Export failed (${response.status}). Please sign in again.`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'nexus-nids-alerts.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const createDemoAlert = async () => {
+    setSimulating(true);
+    setSimStatus(null);
+    try {
+      const csrf = await fetch('http://localhost:8000/api/v1/auth/me', { credentials: 'include' });
+      if (!csrf.ok) throw new Error('Sign in to run the simulation');
+      const session = await csrf.json();
+      const response = await fetch('http://localhost:8000/api/v1/simulation/generate?kind=port_scan&count=1', {
+        method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': session.csrf_token },
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Simulation failed');
+      }
+      setSimStatus('One simulated port-scan alert created (not a real attack).');
+      await fetchDashboardData();
+    } catch (err) {
+      setSimStatus(err instanceof Error ? err.message : 'Simulation failed');
+    } finally {
+      setSimulating(false);
+    }
+  };
+
   const attackDistribution: Record<string, number> = summary?.attack_distribution
     ? summary.attack_distribution
     : (summary?.top_attack_types || []).reduce((acc, item) => {
-        acc[item.type] = item.count;
+        acc[item.name || "Unclassified"] = item.count;
         return acc;
       }, {} as Record<string, number>);
 
@@ -82,11 +133,11 @@ export const Dashboard: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
             Network Intrusion Detection System
             <span className="text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full font-mono">
-              LIVE STREAM
+              ALERT UPDATES
             </span>
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Real-time threat traffic and asset exposure overview
+            Recorded alerts including clearly labeled simulated test events
           </p>
         </div>
 
@@ -98,18 +149,16 @@ export const Dashboard: React.FC = () => {
             <LucideIcons.RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <a
-            href="http://localhost:8000/api/v1/reports/export"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition shadow-lg shadow-indigo-600/20"
-          >
-            <LucideIcons.Download className="w-4 h-4" />
-            Export Report
-          </a>
+          <button onClick={createDemoAlert} disabled={simulating} className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm disabled:opacity-50" title="Adds one labeled simulated alert. Does not send network traffic.">
+            {simulating ? 'Creating…' : 'Test Detection (Simulated)'}
+          </button>
+          <button onClick={exportReport} disabled={exporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition disabled:opacity-50">
+            <LucideIcons.Download className="w-4 h-4" />{exporting ? 'Exporting…' : 'Export Report'}
+          </button>
         </div>
       </div>
 
+      {(exportError || simStatus) && <p role="status" className="mb-3 text-sm text-amber-300">{exportError || simStatus}</p>}
       {error && (
         <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-400 text-sm flex items-center gap-2">
           <LucideIcons.ShieldAlert className="w-5 h-5 shrink-0" />
@@ -126,7 +175,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="text-2xl font-bold text-white">{summary?.total_alerts ?? 0}</div>
           <p className="text-xs text-indigo-400 mt-2 flex items-center gap-1 font-mono">
-            <LucideIcons.TrendingUp className="w-3 h-3" /> Real-time active logs
+            <LucideIcons.TrendingUp className="w-3 h-3" /> Stored alerts (including test events)
           </p>
         </div>
 
@@ -183,7 +232,7 @@ export const Dashboard: React.FC = () => {
         <div className="lg:col-span-2 bg-slate-900/60 border border-slate-800/80 p-5 rounded-xl">
           <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
             <LucideIcons.Activity className="w-4 h-4 text-indigo-400" />
-            Live Threat Traffic Pipeline
+            Recent Alert Timeline
           </h3>
           <div className="h-64 flex items-end justify-between gap-2 pt-8 pb-2 border-b border-slate-800">
             {summary?.traffic_timeline && summary.traffic_timeline.length > 0 ? (
@@ -205,7 +254,7 @@ export const Dashboard: React.FC = () => {
               })
             ) : (
               <div className="w-full h-full flex items-center justify-center text-slate-500 text-sm font-mono">
-                Waiting for background telemetry stream...
+                No recorded alerts yet. New alert events will appear here.
               </div>
             )}
           </div>
@@ -224,7 +273,7 @@ export const Dashboard: React.FC = () => {
                 {totalAttackCount}
               </span>
               <p className="text-xs text-slate-400 uppercase tracking-widest mt-1">
-                Aggregated Ingested Events
+                Detected Attack Alerts
               </p>
             </div>
 
@@ -249,7 +298,7 @@ export const Dashboard: React.FC = () => {
                 })
               ) : (
                 <p className="text-xs text-slate-500 text-center font-mono py-4">
-                  No attack telemetry records found in PostgreSQL database.
+                  No detected attack alerts yet.
                 </p>
               )}
             </div>
@@ -258,7 +307,7 @@ export const Dashboard: React.FC = () => {
           <div className="mt-6 pt-4 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-500">
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              Sensor Pipeline Active
+              Stored Alerts Monitoring
             </span>
             <span>Refreshed every 3s</span>
           </div>

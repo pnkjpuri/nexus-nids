@@ -27,3 +27,8 @@ body {
 .nav-item-smooth {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
 }
+/* Accessible, subtle interactions; sounds intentionally disabled by default. */
+button:not(:disabled), a { transition: background-color .17s ease, border-color .17s ease, transform .17s ease, box-shadow .17s ease; }
+button:not(:disabled):active { transform: scale(.97); }
+button:not(:disabled):focus-visible, a:focus-visible { outline: 2px solid #818cf8; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { button, a, *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
