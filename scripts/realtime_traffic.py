@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import random
 import argparse
@@ -56,14 +56,6 @@ ATTACK_WAVES = [
         "dest_port": 8080,
         "description": "Sequential port enumeration across internal subnet",
     },
-    {
-        "event_type": "HTTPS Encrypted Session",
-        "severity": "low",
-        "rule_id": "NIDS-TLS-010",
-        "protocol": "TLS",
-        "dest_port": 443,
-        "description": "Standard outbound TLS 1.3 handshake",
-    },
 ]
 
 EXTERNAL_ATTACKERS = [
@@ -82,8 +74,9 @@ def main():
     args = parser.parse_args()
 
     owner_email = args.owner.strip().lower()
+    sensor_key = os.environ["NEXUS_SENSOR_KEY"].strip()
     session = requests.Session()
-    session.headers.update({"X-Owner-Email": owner_email})
+    session.headers.update({"X-Sensor-Key": sensor_key})
 
     print("==========================================================")
     print("  NEXUS NIDS - Multi-Vector Threat Traffic Simulator")
@@ -100,7 +93,7 @@ def main():
             dest_ip = random.choice(INTERNAL_TARGETS)
 
             payload = {
-                "owner_email": owner_email,
+                "simulated": True,
                 "event_type": scenario["event_type"],
                 "severity": scenario["severity"],
                 "rule_id": scenario["rule_id"],
@@ -134,4 +127,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

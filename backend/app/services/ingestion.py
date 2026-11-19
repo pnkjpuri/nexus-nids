@@ -1,91 +1,87 @@
+﻿"""Store Suricata EVE events and map alert events to real Alert columns."""
 from datetime import datetime, timezone
-from typing import Optional
-
 from sqlalchemy.orm import Session
-
-from app.models.alert import Alert
 from app.models.event import Event
-from app.models.sensor import Sensor
-from app.services.cia_mapping import calculate_cia_impact
+from app.models.alert import Alert
+
+SEVERITIES = {1: "critical", 2: "high", 3: "medium", 4: "low"}
 
 
-def process_eve_event(db: Session, eve_data: dict, owner_id: Optional[int] = None) -> dict:
-    sensor = db.query(Sensor).filter(Sensor.ip_address == "127.0.0.1").first()
-    if not sensor:
-        sensor = Sensor(
-            name="Primary Suricata Sensor",
-            ip_address="127.0.0.1",
-            status="active",
-        )
-        db.add(sensor)
-        db.commit()
-        db.refresh(sensor)
-
-    event_type = eve_data.get("event_type", "flow")
-    src_ip = eve_data.get("src_ip", "0.0.0.0")
-    src_port = eve_data.get("src_port", 0)
-    dest_ip = eve_data.get("dest_ip", "0.0.0.0")
-    dest_port = eve_data.get("dest_port", 0)
-    proto = eve_data.get("proto", "TCP")
-
+def process_eve_event(db: Session, eve_data: dict, owner_id: int | None = None) -> dict:
     raw_ts = eve_data.get("timestamp")
-    event_ts = datetime.now(timezone.utc)
-    if raw_ts:
-        try:
-            event_ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            event_ts = datetime.now(timezone.utc)
+    try:
+        timestamp = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00")) if raw_ts else datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        timestamp = datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
 
-    net_event = Event(
-        timestamp=event_ts.replace(tzinfo=None),
-        event_type=event_type,
-        severity="low",
-        src_ip=src_ip,
-        dest_ip=dest_ip,
+    raw_kind = str(eve_data.get("event_type") or "flow")
+    legacy_detection = ("rule_id" in eve_data and "severity" in eve_data)
+    benign_rule = str(eve_data.get("rule_id", "")) in {"NIDS-BASE-001", "NIDS-TLS-010", "NIDS-DNS-005", "NIDS-UDP-002", "NIDS-ICMP-003"}
+    kind = "alert" if legacy_detection and not benign_rule else ("flow" if legacy_detection else raw_kind)
+
+    src = str(eve_data.get("src_ip") or eve_data.get("source_ip") or "0.0.0.0")
+    dst = str(eve_data.get("dest_ip") or eve_data.get("destination_ip") or "0.0.0.0")
+    proto = str(eve_data.get("proto") or eve_data.get("protocol") or "IP")
+    src_port = eve_data.get("src_port") if eve_data.get("src_port") is not None else eve_data.get("source_port")
+    dest_port = eve_data.get("dest_port") if eve_data.get("dest_port") is not None else eve_data.get("destination_port")
+
+    event = Event(
+        timestamp=timestamp,
+        event_type=kind,
+        src_ip=src,
+        dest_ip=dst,
         src_port=src_port,
         dest_port=dest_port,
         protocol=proto,
-        description=f"EVE {event_type} from {src_ip} to {dest_ip}",
         raw_event=eve_data,
     )
-    db.add(net_event)
-    db.commit()
-    db.refresh(net_event)
+    db.add(event)
+    db.flush()
+    result = {"type": kind, "event_id": event.id, "alert_created": False}
 
-    if event_type == "alert" and "alert" in eve_data:
-        alert_info = eve_data.get("alert", {})
-        category = alert_info.get("category", "Unclassified Threat")
-        signature = alert_info.get("signature", "Suspicious Network Activity")
-        severity_val = alert_info.get("severity", 3)
+    details = eve_data.get("alert")
+    if legacy_detection and not benign_rule:
+        severity_label = str(eve_data.get("severity", "medium")).lower()
+        numeric = {"critical": 1, "high": 2, "medium": 3, "low": 4}.get(severity_label, 3)
+        details = {
+            "signature": raw_kind,
+            "category": raw_kind,
+            "severity": numeric,
+            "action": "logged",
+        }
 
-        severity_map = {1: "low", 2: "medium", 3: "critical", 4: "critical"}
-        severity_label = severity_map.get(severity_val, "medium")
-        cia = calculate_cia_impact(category, severity_label)
-
-        alert_entry = Alert(
+    if kind == "alert" and isinstance(details, dict):
+        raw_sev = details.get("severity", 3)
+        severity = SEVERITIES.get(int(raw_sev), "medium") if str(raw_sev).isdigit() else str(raw_sev).lower()
+        signature = str(details.get("signature") or "Unclassified detection")
+        category = str(details.get("category") or "Unclassified")
+        alert = Alert(
             owner_id=owner_id,
-            timestamp=event_ts,
-            event_type=category,
-            category=category,
-            signature=signature,
-            title=signature,
-            rule_id=str(alert_info.get("signature_id", "EVE-001")),
-            severity=severity_label,
-            src_ip=src_ip,
-            dest_ip=dest_ip,
-            source_ip=src_ip,
-            destination_ip=dest_ip,
+            timestamp=timestamp,
+            event_type=signature,
+            severity=severity,
+            src_ip=src,
+            dest_ip=dst,
+            source_ip=src,
+            destination_ip=dst,
             src_port=src_port,
             dest_port=dest_port,
             source_port=src_port,
             destination_port=dest_port,
             protocol=proto,
-            description=f"{signature} [{category}] | CIA={cia}",
-            action=alert_info.get("action", "logged"),
-            status="detected",
-            raw_event=eve_data,
+            title=signature,
+            signature=signature,
+            category=category,
+            description=str(eve_data.get("description") or signature),
+            action=str(details.get("action") or "logged"),
+            raw_event={**eve_data, **({"simulated": True} if eve_data.get("simulated") else {})},
+            status="open",
         )
-        db.add(alert_entry)
-        db.commit()
+        db.add(alert)
+        db.flush()
+        result.update(alert_created=True, alert_id=alert.id)
 
-    return {"type": event_type, "event_id": str(net_event.id)}
+    db.commit()
+    return result
